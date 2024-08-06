@@ -1,0 +1,132 @@
+---
+title: "disease network(community)"
+author: 孙佳仪
+documentclass: ctexart
+output:
+  rticles::ctex:
+    fig_caption: yes
+    number_sections: yes
+    toc: yes
+---
+```{r}
+library(dplyr)
+load("algorithm results.Rdata")
+#load("algorithm results (male).Rdata")
+#load("algorithm results (female).Rdata")
+#load("algorithm results (old).Rdata")
+#load("algorithm results (young).Rdata")
+ccs_prv = read.csv("CCS_prevalence.csv")$x
+P = length(ccs_prv)
+```
+```{r}
+#adjacency matrix
+A = diag(0, P)
+colnames(A) = ccs_prv
+tao = .03
+for(i in 1:(P-1)){
+  for(j in (i+1):P){
+    A[i,j] = A[j,i] = max(abs(G.final[i,j]), abs(G.final[j,i]), abs(H1.final[i,j]), abs(H1.final[j,i]), abs(H2.final[i,j]), abs(H2.final[j,i]), abs(K.final[i,j]), abs(K.final[j,i]))
+  }
+}
+A[A < tao] = 0
+#A_male = A
+#A_female = A
+#A_old = A
+#A_young = A
+```
+```{r}
+#connectivity
+K = apply(A, 1, sum)
+```
+```{r}
+#network communities
+library("WGCNA")
+TOM = TOMsimilarity(A)
+cnnctTOM = apply(TOM, 1, sum) #TOM connectivity
+dissTOM = 1 - TOM
+colnames(dissTOM) = ccs_prv
+
+amtTree = hclust(as.dist(dissTOM), method = "ward.D") #hierarchical clustering
+dynamicMods = cutreeDynamic(dendro = amtTree, distM = dissTOM, minClusterSize = 5, method = "hybrid", deepSplit = 2) #module (dynamic tree cut)
+table(dynamicMods)
+TOMplot(dissTOM, amtTree, Colors = dynamicMods)
+
+#result = rbind(ccs_prv, dynamicMods)
+#save(result, file = "populationMods.Rdata")
+```
+```{r}
+Cnnct = intramodularConnectivity(A, colors = dynamicMods)
+totalcnnct = Cnnct$kTotal #total connectivity(K)
+intracnnct = Cnnct$kWithin #intramodular connectivity
+extracnnct = Cnnct$kOut #extramodular conncectivity
+node = data.frame(ccs_prv, dynamicMods, cnnctTOM, totalcnnct, intracnnct, extracnnct)
+#write.csv(node, file = "Vinfo.csv")
+```
+```{r}
+library(tidyr)
+library(dplyr)
+edge = data.frame(rep(1:P, each = P), rep(1:P, times = P))
+colnames(edge) = c("source", "target")
+edge$weight = gather(data.frame(A))$value
+edge = subset(edge, edge$source < edge$target)
+#write.csv(edge, file = "Einfo.csv")
+#save(node, edge, file = "node and edge (male).Rdata")
+#save(node, edge, file = "node and edge (female).Rdata")
+#save(node, edge, file = "node and edge (old).Rdata")
+#save(node, edge, file = "node and edge (young).Rdata")
+```
+```{r}
+library(igraph)
+A[diag(A)] = 0
+grph = graph_from_adjacency_matrix(A, mode = "undirected", weighted = T)
+vcolor = c("red","orange","yellow","green","blue", "purple")
+V(grph)$color = vcolor[dynamicMods]
+plot(grph)
+write.graph(grph, "population.graphml", format = "graphml")
+```
+```{r}
+#difference
+A_gender = A_male - A_female
+A_gender[abs(A_gender) < tao] = 0
+grph = graph_from_adjacency_matrix(A_gender, mode = "undirected", weighted = T)
+vcolor = c("red","orange","yellow","green","blue", "purple")
+V(grph)$color = vcolor[dynamicMods]
+plot(grph)
+write.graph(grph, "gender.graphml", format = "graphml")
+
+grph98 = graph_from_adjacency_matrix(A_gender, mode = "undirected", weighted = T)
+grph98 = subgraph.edges(grph98, E(grph98)[incident(grph98, "98")])
+ecolor = c("red", "blue")
+eindex = ifelse(E(grph98)$weight > 0, 1, 2)
+E(grph98)$color = ecolor[eindex]
+a = which(colnames(A_gender) == 98) #33
+b = sapply(names(neighbors(grph98, "98")), function(x){which(colnames(A_gender) == x)}) #6 7 13 18 32 40 48 54 73 75 76 77 81
+eindex = ifelse(A_male[a,b] > 0 & A_female[a,b] > 0, 1, 2)
+vcolor = c("red","orange","yellow","green","blue", "purple")
+V(grph98)$color = vcolor[dynamicMods[match(names(V(grph98)), ccs_prv)]]
+plot(grph98)
+write.graph(grph98, "gender98.graphml", format = "graphml")
+
+A_age = A_young - A_old
+A_age[abs(A_age) < tao] = 0
+grph = graph_from_adjacency_matrix(A_age, mode = "undirected", weighted = T)
+vcolor = c("red","orange","yellow","green","blue", "purple")
+V(grph)$color = vcolor[dynamicMods]
+plot(grph)
+write.graph(grph, "age.graphml", format = "graphml")
+
+grph98 = graph_from_adjacency_matrix(A_age, mode = "undirected", weighted = T)
+grph98 = subgraph.edges(grph98, E(grph98)[incident(grph98, "98")])
+ecolor = c("red", "blue")
+eindex = ifelse(E(grph98)$weight > 0, 1, 2)
+E(grph98)$color = ecolor[eindex]
+a = which(colnames(A_gender) == 98)
+b = sapply(names(neighbors(grph98, "98")), function(x){which(colnames(A_gender) == x)})
+eindex = ifelse(A_male[a,b] > 0 & A_female[a,b] > 0, 1, 2)
+vcolor = c("red","orange","yellow","green","blue", "purple")
+V(grph98)$color = vcolor[dynamicMods[match(names(V(grph98)), ccs_prv)]]
+plot(grph98)
+write.graph(grph98, "age98.graphml", format = "graphml")
+```
+
+

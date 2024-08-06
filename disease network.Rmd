@@ -1,0 +1,235 @@
+---
+title: "Disease Network"
+author: 孙佳仪
+documentclass: ctexart
+output:
+  rticles::ctex:
+    fig_caption: yes
+    number_sections: yes
+    toc: yes
+---
+#数据预处理
+```{r}
+data = read.csv(file = "OODO_ALL(original _data).csv", header = T)
+library(dplyr)
+library(stringr)
+data = data %>% subset(ICD9_1 != "") #去除主疾病缺失值
+```
+```{r}
+#ICD与CSS对应
+dxref = read.csv(file = "dxref.csv", header = T) %>% subset(select = c("X.ICD.9.CM.CODE.", "X.CCS.CATEGORY."))
+dxref = data.frame(lapply(dxref, function(x){gsub("'| ", "", x)}))
+colnames(dxref) = c("ICD9", "CCS")
+dxlabel = read.csv(file = "dxlabel.csv", header = T)
+colnames(dxlabel) = c("CCS", "CCS description")
+data_dx = left_join(dxref, dxlabel, by = "CCS")
+data_dx = data_dx[-1,]
+data_dx$CCS[str_detect(data_dx$ICD9, "(^[EV])|(^6[3-7][0-9])|(^7[6-9][0-9])|(^[89][0-9][0-9])")] = 0
+#外伤（E/V code），妊娠（630-679），症状（760-999）参与AMT分配，但不参与AMT疾病网络构造
+
+dCCS = function(x){
+  sapply(x, function(y){data_dx$CCS[which(y == data_dx$ICD9)]}) %>% as.character() %>% as.integer()
+}
+
+data$CCS1 = dCCS(data$ICD9_1)
+data$CCS2 = dCCS(data$ICD9_2)
+data$CCS3 = dCCS(data$ICD9_3)
+data$CCS4 = dCCS(data$ICD9_4)
+data$CCS5 = dCCS(data$ICD9_5)
+data = data %>% subset(!is.na(CCS1)) %>% subset(CCS1 != 0) #去除主疾病缺失值+去除主疾病外伤（E/V code），妊娠（630-679），症状（760-999）
+#write.csv(data, "OODO(plus_CCS_data).csv")
+```
+```{r}
+N = length(unique(data$ID))
+data_CCS = data %>% subset(select = c("ID", "CCS1", "CCS2", "CCS3", "CCS4", "CCS5"))
+data_ID_CCS = data.frame("ID" = rep(data_CCS$ID, times = 5), "CCS" = c(data_CCS$CCS1, data_CCS$CCS2, data_CCS$CCS3, data_CCS$CCS4, data_CCS$CCS5)) %>% na.omit() %>% unique()
+CCS_freq = table(data_ID_CCS$CCS)
+CCS_prv = CCS_freq[which(CCS_freq > N * .03)]
+CCS_prv = CCS_prv[-1] #去除外伤，妊娠），症状
+CCS_name = names(CCS_prv)
+#write.csv(CCS_name, "CCS_prevalence.csv")
+```
+```{r}
+data = read.csv("OODO(plus_CCS_data).csv")
+data = data[data$AMT > 0,]
+dAMT = function(x){
+  amt = rep(0, times = 5)
+  total_amt = as.numeric(x["AMT"])
+  n = 5 - sum(is.na(x[c("CCS1", "CCS2", "CCS3", "CCS4", "CCS5")]))
+  if(n == 1){
+    amt[1] = total_amt
+  }
+  else{
+    amt[1] = total_amt * .6
+    for(i in 2:n){
+      amt[i] = total_amt * .4 / (n - 1)
+    }
+  }
+  return(amt)
+}
+data[,c("AMT1", "AMT2", "AMT3", "AMT4", "AMT5")] = t(apply(data, 1, dAMT))
+#write.csv(data, "data_AMT.csv")
+```
+```{r}
+#数据预处理主要疾病的医疗开销的分布图
+load("process results.Rdata")
+ccs = read.csv("CCS_prevalence.csv")$x
+freq = apply(V, 2, sum)
+names(freq) = ccs
+freq_max = names(sort(freq, decreasing = T))[1:10]
+prv_max = sort(freq, decreasing = T)[1:10] / 9927
+year_max = rep(0, 10)
+amt_max = rep(0, 10)
+avramt_max = rep(0, 10)
+for(j in 1:10){
+  year_max[j] = data %>% subset((CCS1 == freq_max[j] & AMT1 > 0) | (CCS2 == freq_max[j] & AMT2 > 0) | (CCS3 == freq_max[j] & AMT3 > 0) | (CCS4 == freq_max[j] & AMT4 > 0) | (CCS5 == freq_max[j] & AMT5 > 0), select = YEAR) %>% unique() %>% nrow()
+  amt_max[j] = data %>% subset(CCS1 == freq_max[j] & AMT1 > 0, select = AMT1) %>% log() %>% sum() + data %>% subset(CCS2 == freq_max[j] & AMT2 > 0, select = AMT2) %>% log() %>% sum() + data %>% subset(CCS3 == freq_max[j] & AMT3 > 0, select = AMT3) %>% log() %>% sum() + data %>% subset(CCS4 == freq_max[j] & AMT4 > 0, select = AMT4) %>% log() %>% sum() + data %>% subset(CCS5 == freq_max[j] & AMT5 > 0, select = AMT5) %>% log() %>% sum()
+  avramt_max[j] = amt_max[j] / year_max[j]
+}
+df = data.frame(freq_max, prv_max, avramt_max)
+df
+
+ccs = read.csv("CCS_prevalence.csv")$x
+amt = rep(0, 104)
+for(j in 1:104){
+  amt[j] = data %>% subset(CCS1 == ccs[j] & AMT1 > 0, select = AMT1) %>% log() %>% sum() + data %>% subset(CCS2 == ccs[j] & AMT2 > 0, select = AMT2) %>% log() %>% sum() + data %>% subset(CCS3 == ccs[j] & AMT3 > 0, select = AMT3) %>% log() %>% sum() + data %>% subset(CCS4 == ccs[j] & AMT4 > 0, select = AMT4) %>% log() %>% sum() + data %>% subset(CCS5 == ccs[j] & AMT5 > 0, select = AMT5) %>% log() %>% sum()
+}
+names(amt) = ccs
+amt_max = sort(amt, decreasing = T)[1:10]
+freq_max = names(amt_max)
+prv_max = rep(0, 10)
+for(i in 1:10){
+  prv_max[i] = freq[names(freq) == freq_max[i]] / 9927
+}
+year_max = rep(0, 10)
+for(j in 1:10){
+  year_max[j] = data %>% subset((CCS1 == freq_max[j] & AMT1 > 0) | (CCS2 == freq_max[j] & AMT2 > 0) | (CCS3 == freq_max[j] & AMT3 > 0) | (CCS4 == freq_max[j] & AMT4 > 0) | (CCS5 == freq_max[j] & AMT5 > 0), select = YEAR) %>% unique() %>% nrow()
+  amt_max[j] = data %>% subset(CCS1 == freq_max[j] & AMT1 > 0, select = AMT1) %>% log() %>%  sum() + data %>% subset(CCS2 == freq_max[j] & AMT2 > 0, select = AMT2) %>% log() %>% sum() + data %>% subset(CCS3 == freq_max[j] & AMT3 > 0, select = AMT3) %>% log() %>% sum() + data %>% subset(CCS4 == freq_max[j] & AMT4 > 0, select = AMT4) %>% log() %>% sum() +   data %>% subset(CCS5 == freq_max[j] & AMT5 > 0, select = AMT5) %>% log() %>% sum()
+  avramt_max[j] = amt_max[j] / year_max[j]
+}
+df = data.frame(freq_max, prv_max, avramt_max)
+df
+```
+```{r}
+ID_list = unique(data$ID)
+N = length(ID_list)
+P = length(CCS_name)
+Y = matrix(NA, nrow = N, ncol = P)
+for(i in 1:N){
+  data_ID = data_AMT %>% subset(ID == ID_list[i])
+  for(j in 1:P){
+    AMT1_sum = data_ID %>% subset(CCS1 == CCS_name[j], select = AMT1)
+    AMT2_sum = data_ID %>% subset(CCS2 == CCS_name[j], select = AMT2)
+    AMT3_sum = data_ID %>% subset(CCS3 == CCS_name[j], select = AMT3)
+    AMT4_sum = data_ID %>% subset(CCS4 == CCS_name[j], select = AMT4)
+    AMT5_sum = data_ID %>% subset(CCS5 == CCS_name[j], select = AMT5)
+    Y[i,j] = sum(AMT1_sum, AMT2_sum, AMT3_sum, AMT4_sum, AMT5_sum)
+  }
+}
+#write.csv(Y, "Y.csv")
+logY = log(Y + 1) #对零膨胀数据作log transformation接近正态分布
+#write.csv(logY, "logY.csv")
+V = ifelse(logY == 0, 0, 1)
+#write.csv(V, "V.csv")
+#save(V, Y, logY, file = "process results.Rdata")
+```
+```{r}
+#KS检验正态性
+apply(Y, 2, function(x){
+  x = x[x > 0]
+  y = ks.test(x, "pnorm", mean = mean(x), sd = sqrt(var(x)))$exact
+  return(y)})
+#图像检验正态性
+x = Y[,1]
+x = x[x > 0]
+ggplot(data.frame(x), aes(x = x)) + geom_density()
+ggplot(data.frame(x), aes(sample = x)) + stat_qq() + stat_qq_line(lty = "dashed")
+```
+```{r}
+#性别子群体
+data_m = data[data$ID_SEX == "M",]
+data_f = data[data$ID_SEX == "F",]
+CCS = read.csv("CCS_prevalence.csv")$x
+P = length(CCS)
+
+ID_m = unique(data_m$ID)#4944
+N = length(ID_m)
+Y = matrix(NA, nrow = N, ncol = P)
+for(i in 1:N){
+  data_ID = data_m %>% subset(ID == ID_m[i])
+  for(j in 1:P){
+    AMT1_sum = data_ID %>% subset(CCS1 == CCS[j], select = AMT1)
+    AMT2_sum = data_ID %>% subset(CCS2 == CCS[j], select = AMT2)
+    AMT3_sum = data_ID %>% subset(CCS3 == CCS[j], select = AMT3)
+    AMT4_sum = data_ID %>% subset(CCS4 == CCS[j], select = AMT4)
+    AMT5_sum = data_ID %>% subset(CCS5 == CCS[j], select = AMT5)
+    Y[i,j] = sum(AMT1_sum, AMT2_sum, AMT3_sum, AMT4_sum, AMT5_sum)
+  }
+}
+logY = log(Y + 1)
+V = ifelse(logY == 0, 0, 1)
+#save(V, Y, logY, file = "process results (male).Rdata")
+
+ID_f = unique(data_f$ID)#4986
+N = length(ID_f)
+Y = matrix(NA, nrow = N, ncol = P)
+for(i in 1:N){
+  data_ID = data_f %>% subset(ID == ID_f[i])
+  for(j in 1:P){
+    AMT1_sum = data_ID %>% subset(CCS1 == CCS[j], select = AMT1)
+    AMT2_sum = data_ID %>% subset(CCS2 == CCS[j], select = AMT2)
+    AMT3_sum = data_ID %>% subset(CCS3 == CCS[j], select = AMT3)
+    AMT4_sum = data_ID %>% subset(CCS4 == CCS[j], select = AMT4)
+    AMT5_sum = data_ID %>% subset(CCS5 == CCS[j], select = AMT5)
+    Y[i,j] = sum(AMT1_sum, AMT2_sum, AMT3_sum, AMT4_sum, AMT5_sum)
+  }
+}
+logY = log(Y + 1)
+V = ifelse(logY == 0, 0, 1)
+#save(V, Y, logY, file = "process results (female).Rdata")
+```
+```{r}
+#年龄子群体
+data_o = data[data$AGE >= 65,]
+data_y = data[data$AGE < 65,]
+CCS = read.csv("CCS_prevalence.csv")$x
+P = length(CCS)
+
+ID_o = unique(data_o$ID) #1609
+N = length(ID_o)
+Y = matrix(NA, nrow = N, ncol = P)
+for(i in 1:N){
+  data_ID = data_o %>% subset(ID == ID_o[i])
+  for(j in 1:P){
+    AMT1_sum = data_ID %>% subset(CCS1 == CCS[j], select = AMT1)
+    AMT2_sum = data_ID %>% subset(CCS2 == CCS[j], select = AMT2)
+    AMT3_sum = data_ID %>% subset(CCS3 == CCS[j], select = AMT3)
+    AMT4_sum = data_ID %>% subset(CCS4 == CCS[j], select = AMT4)
+    AMT5_sum = data_ID %>% subset(CCS5 == CCS[j], select = AMT5)
+    Y[i,j] = sum(AMT1_sum, AMT2_sum, AMT3_sum, AMT4_sum, AMT5_sum)
+  }
+}
+logY = log(Y + 1)
+V = ifelse(logY == 0, 0, 1)
+#save(V, Y, logY, file = "process results (old).Rdata")
+
+ID_y = unique(data_y$ID) #9224
+N = length(ID_y)
+Y = matrix(NA, nrow = N, ncol = P)
+for(i in 1:N){
+  data_ID = data_y %>% subset(ID == ID_y[i])
+  for(j in 1:P){
+    AMT1_sum = data_ID %>% subset(CCS1 == CCS[j], select = AMT1)
+    AMT2_sum = data_ID %>% subset(CCS2 == CCS[j], select = AMT2)
+    AMT3_sum = data_ID %>% subset(CCS3 == CCS[j], select = AMT3)
+    AMT4_sum = data_ID %>% subset(CCS4 == CCS[j], select = AMT4)
+    AMT5_sum = data_ID %>% subset(CCS5 == CCS[j], select = AMT5)
+    Y[i,j] = sum(AMT1_sum, AMT2_sum, AMT3_sum, AMT4_sum, AMT5_sum)
+  }
+  print(i)
+}
+logY = log(Y + 1)
+V = ifelse(logY == 0, 0, 1)
+#save(V, Y, logY, file = "process results (young).Rdata")
+```
+

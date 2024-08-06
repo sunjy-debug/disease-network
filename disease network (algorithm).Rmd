@@ -1,0 +1,148 @@
+---
+title: "Disease Network (algorithm)"
+author: 孙佳仪
+documentclass: ctexart
+output:
+  rticles::ctex:
+    fig_caption: yes
+    number_sections: yes
+    toc: yes
+---
+#算法
+```{r}
+library(dplyr)
+#V = read.csv("V.csv")[,-1] %>% as.matrix()
+#Y = read.csv("logY.csv")[,-1] %>% as.matrix()
+#load("process results (male).Rdata")
+#load("process results (female).Rdata")
+#load("process results (old).Rdata")
+load("process results (young).Rdata")
+Y = logY
+
+N = dim(Y)[1]
+P = dim(Y)[2]
+
+G.initial = 1
+H.initial = 1
+K.initial = 1
+thr = 0.00005
+t1 = 0.0005
+t2 = 0.0005
+t3 = 0.0005
+lambda = 0.01
+node = 1 : P
+G = diag(G.initial, P) #V协方差矩阵 
+H = diag(H.initial, P) #VY协方差矩阵
+K = diag(K.initial, P) #Y协方差矩阵
+#H0假设疾病之间无条件相关性，非对角元素为0
+G.final = G
+H1.final = H
+H2.final = H
+K.final = K
+```
+```{r}
+library(foreach)
+library(doParallel)
+numCores = detectCores()
+registerDoParallel(numCores)
+
+q1 = Sys.time()
+
+parameter.list = foreach(j = 51:P) %dopar% {
+  g.grad = rep(0, P)
+  h1.grad = rep(0, P)
+  h2.grad = rep(0, P)
+  k.grad = rep(0, P)
+  g = G[,j]
+  h1 = H[j,]
+  h2 = H[,j]
+  k = K[,j]
+  
+  itr = 0
+  while(1){
+    itr = itr + 1
+    parameter.before = c(g, h1, h2, k)
+    
+    gj = g[j] + 2 * V[,-j] %*% g[-j] + Y[,-j] %*% h1[-j]
+    hj = h1[j] + V[,-j] %*% h2[-j] - Y[,-j] %*% k[-j]
+    kj = rep(k[j], N)
+    wj = gj + hj^2/kj/2 - log(kj/2/pi)/2
+    Nj = 1/(1 + exp(-wj))
+    Qj = Nj * hj / kj
+    Pj = (hj^2/2/kj^2 + 1/2/kj) * Nj
+    
+    g.grad[j] = sum(V[,j])/N - sum(Nj)/N
+    g.grad[-j] = 2 * t(V[,-j]) %*% V[,j]/N - 2 * t(V[,-j]) %*% Nj/N
+    h1.grad[j] = sum(Y[,j])/N - sum(Qj)/N
+    h2.grad[j] = h1.grad[j]
+    h1.grad[-j] = t(Y[,-j]) %*% V[,j]/N - t(Y[,-j]) %*% Nj/N
+    h2.grad[-j] = t(V[,-j]) %*% Y[,j]/N - t(V[,-j]) %*% Qj/N
+    k.grad[j] = -.5 * t(Y[,j]) %*% Y[,j]/N + sum(Pj)/N
+    k.grad[-j] = -t(Y[,-j]) %*% Y[,j]/N + t(Y[,-j]) %*% Qj/N
+    
+    g[j] = g[j] + t1 * g.grad[j]
+    h1[j] = h1[j] + t2 * h1.grad[j]
+    h2[j] = h1[j] + t2 * h2.grad[j]
+    k[j] = k[j] + t3 * k.grad[j]
+    
+    for (i in node[-j]){
+      g.trans = g[i] + t1 * g.grad[i]
+      if(g.trans < (-lambda * t1)){
+        g[i] = g.trans + lambda * t1
+      }else if(g.trans > lambda * t1){
+        g[i] = g.trans - lambda * t1
+      }else{g[i] = 0}
+    
+      h1.trans = h1[i] + t2 * h1.grad[i]
+      if(h1.trans < (-lambda * t2)){
+        h1[i] = h1.trans + lambda * t2
+      }else if(h1.trans > lambda * t2){
+        h1[i] = h1.trans - lambda * t2
+      }else{h1[i] = 0}
+      
+      h2.trans = h2[i] + t2 * h2.grad[i]
+      if(h2.trans < (-lambda * t2)){
+        h2[i] = h2.trans + lambda * t2
+      }else if(h2.trans > lambda * t2){
+        h2[i] = h2.trans - lambda * t2
+      }else{h2[i] = 0}
+      
+      k.trans = k[i] + t3 * k.grad[i]
+      if(k.trans < (-lambda * t3)){
+        k[i] = k.trans + lambda * t3
+      }else if(k.trans > lambda * t3){
+        k[i] = k.trans - lambda * t3
+      }else{k[i] = 0}
+    }
+    
+    parameter.after = c(g, h1, h2, k)
+    diff = parameter.after - parameter.before
+    if(all(abs(diff) < thr) | (itr > 5000)){
+      break
+    }
+    else{next}
+  }
+  
+  list(g, h1, h2, k)
+}
+
+q2 = Sys.time()
+print(q2 - q1)
+
+stopImplicitCluster()
+
+```
+```{r}
+for (j in 51:P){
+  G.final[,j] = parameter.list[[j-50]][[1]]
+  H1.final[j,] = t(parameter.list[[j-50]][[2]])
+  H2.final[,j] = parameter.list[[j-50]][[3]]
+  K.final[,j] = parameter.list[[j-50]][[4]]
+}
+#save(G.final, H1.final, H2.final, K.final, file = "algorithm results (male).Rdata")
+#save(G.final, H1.final, H2.final, K.final, file = "algorithm results (female).Rdata")
+#save(G.final, H1.final, H2.final, K.final, file = "algorithm results (old).Rdata")
+#save(G.final, H1.final, H2.final, K.final, file = "algorithm results (young).Rdata")
+```
+
+
